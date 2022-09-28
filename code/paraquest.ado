@@ -6,13 +6,15 @@ program define do_processing
     version 17.0
 	
 	replace event="AnswerSet" if event=="AnswerRemoved"
-	generate vname=substr(parameters,1,strpos(parameters,"||")-1) if event=="AnswerSet"
+	generate vname=substr(parameters,1,strpos(parameters,"||")-1) if inlist(event, "AnswerSet", "VariableEnabled", "VariableDisabled")
+	
 	assert !missing(vname) if event=="AnswerSet"
 	drop parameters
-	list
+	// --- list
 
-	drop if inlist(event, "VariableSet", "CommentSet")
-	drop if inlist(event, "Restarted", "TranslationSwitched", "QuestionDeclaredValid", "QuestionDeclaredInvalid")
+	drop if inlist(event, "VariableSet", "VariableEnabled", "VariableDisabled", ///
+						  "CommentSet", "Restarted", "TranslationSwitched", ///
+						  "QuestionDeclaredValid", "QuestionDeclaredInvalid")
 
 	count if (event=="ReceivedByInterviewer") & (event[_n-1]=="ReceivedBySupervisor")
 	if r(N) > 0 {
@@ -59,7 +61,7 @@ program define do_processing
 	format tottime %21.0g
 	generate rtime=etime-wait
 	
-	list, sepby(v)
+	// --- list, sepby(v)
 	
 	drop if inlist(event, "Paused", "Resumed")
 	replace ntime=eventtime[_n-1] if !missing(eventtime[_n-1])
@@ -67,15 +69,15 @@ program define do_processing
 	generate double duration=1000*(tottime-totwait) // in milliseconds
 	//assert duration>=0
 	
-	list, sepby(v)
+	// --- list, sepby(v)
 	susotime readable_duration duration, generate(dt) short
 
 	//drop wait pevt v ntime dur // order
-	list
+	// --- list
 
-	collapse (sum)duration , by(/* interview__id*/  responsible vname)
+	collapse (sum)duration , by(responsible vname)
 	susotime readable_duration duration, generate(dt) short
-	list
+	// --- list
 	assert !missing(vname)
 end
 
@@ -162,7 +164,7 @@ program define paraquest
 		display as text `"You can download Stata package -susotime- from {browse "https://github.com/radyakin/susotime"}"'
 	}	
 	
-	syntax anything
+	syntax anything, [debug(string)]
 
 	pwf
 	local cf "`r(currentframe)'"
@@ -176,17 +178,34 @@ program define paraquest
 	local wf `anything'
 	
 	cd `"`wf'"'
-	do "paradata.do"
+	capture do "paradata.do"
+	local retcode=_rc
 	cd `"`cdir'"'
+	
+	if (`retcode'==111) {
+		// below texts are duplications of what the modern version of 
+		// Survey Solutions would describe those columns.
+		label variable tz_offset `"Timezone offset relative to UTC"'
+        label variable parameters `"Event-specific parameters"'
+	}
 
+	
 	local mode="quietly"
 	if (`"`debug'"'!="") {
 		keep if (interview__id==`"`debug'"')
 		local mode="noisily"
 	}
 
+	
+	// preliminary deletion of events which will not be processed
+	drop if inlist(event, ///
+	    "VariableSet", "VariableEnabled", "VariableDisabled", "CommentSet", ///
+		"Restarted", "TranslationSwitched", "QuestionDeclaredValid", "QuestionDeclaredInvalid")
+	
+	
+	// todo: this is expensive - 3 copies of the data
 	frame copy `cf' paradata
-	frame copy `cf' toc
+	frame put interview__id, into(toc) // just one variable
 	frame change toc
 	contract interview__id
 	quietly count
@@ -196,7 +215,7 @@ program define paraquest
 	forval qqq=1/`=_N' {
 		frame change toc
 		local interviewid=interview__id[`qqq']
-		display in green `"`interviewid'"'
+		display in green string(`qqq',"%10.0g") `" `interviewid' "' string(`qqq'/`=_N'*100,"%10.2f") "%"
 		
 		frame copy paradata work, replace
 		frame change work
