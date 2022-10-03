@@ -3,18 +3,19 @@
 *** sradyakin@@worldbank.org
 
 program define do_processing
-    version 17.0
+	// Do processing of one interview
+	version 17.0
+	
+	syntax , [debug]
 	
 	replace event="AnswerSet" if event=="AnswerRemoved"
-	generate vname=substr(parameters,1,strpos(parameters,"||")-1) if inlist(event, "AnswerSet", "VariableEnabled", "VariableDisabled")
+	
+	generate vname = substr(parameters, 1, strpos(parameters,"||")-1) ///
+	    if inlist(event, "AnswerSet", "VariableEnabled", "VariableDisabled")
 	
 	assert !missing(vname) if event=="AnswerSet"
 	drop parameters
-	// --- list
-
-	drop if inlist(event, "VariableSet", "VariableEnabled", "VariableDisabled", ///
-						  "CommentSet", "Restarted", "TranslationSwitched", ///
-						  "QuestionDeclaredValid", "QuestionDeclaredInvalid")
+	if ("`debug'"!="") list
 
 	count if (event=="ReceivedByInterviewer") & (event[_n-1]=="ReceivedBySupervisor")
 	if r(N) > 0 {
@@ -61,23 +62,23 @@ program define do_processing
 	format tottime %21.0g
 	generate rtime=etime-wait
 	
-	// --- list, sepby(v)
+	if ("`debug'"!="") list, sepby(v)
 	
 	drop if inlist(event, "Paused", "Resumed")
 	replace ntime=eventtime[_n-1] if !missing(eventtime[_n-1])
 
 	generate double duration=1000*(tottime-totwait) // in milliseconds
-	//assert duration>=0
+	//assert duration>=0 // this will be dealt with later
 	
-	// --- list, sepby(v)
-	susotime readable_duration duration, generate(dt) short
+	if ("`debug'"!="") list, sepby(v)
+	if ("`debug'"!="") susotime readable_duration duration, generate(dt) short
 
 	//drop wait pevt v ntime dur // order
-	// --- list
+	if ("`debug'"!="") list
 
 	collapse (sum)duration , by(responsible vname)
 	susotime readable_duration duration, generate(dt) short
-	// --- list
+	if ("`debug'"!="") list
 	assert !missing(vname)
 end
 
@@ -100,7 +101,7 @@ program define inject_duration
 		local ininterviews=`ninterviews'[`i']
 		
 		quietly _inject_duration , ifile(`"`t1'"') ofile(`"`t2'"') ///
-		                           variable(`"`ivariable'"') ///
+								   variable(`"`ivariable'"') ///
 								   duration(`"`iduration'"') ///
 								   ninterviews(`ininterviews')
 		local t3 `"`t1'"'
@@ -152,19 +153,78 @@ program define _frappend
 	}
 end	
 
+program define loadparadata
 
+	// Load paradata from current directory
+	
+    version 16.0
+	
+	tempfile tmp
+
+	filefilter "paradata.do" `"`tmp'"', ///
+	  from(`"insheet using "paradata.tab", tab case names"') ///
+	  to(`"import delimited "paradata.tab"`=char(10)'`=char(13)'capture rename ïinterview__id interview__id"')
+
+	do `"`tmp'"'
+end
+
+
+program define inspectparadata
+    
+	// Verify paradata doesn't contain any unknown events
+	
+	version 16.0
+	
+	assert inlist(event, ///
+		"AnswerRemoved", "AnswerSet", "ApproveByHeadquarter", ///
+		"ApproveBySupervisor", "ClosedBySupervisor", "CommentSet", ///
+		"Completed", "InterviewCreated", "InterviewModeChanged") | ///
+		///
+		inlist(event, ///
+		"InterviewerAssigned", "KeyAssigned", "OpenedBySupervisor", ///
+		"Paused", "QuestionDeclaredInvalid", "QuestionDeclaredValid", ///
+		"ReceivedByInterviewer", "ReceivedBySupervisor", ///
+		"RejectedByHeadquarter") | ///
+		///
+		inlist(event, ///
+		"RejectedBySupervisor", "Restarted", "Resumed", ///
+		"SupervisorAssigned", "TranslationSwitched", ///
+		"UnapproveByHeadquarters", "VariableDisabled", "VariableEnabled", ///
+		"VariableSet")
+
+end
+
+program define reduceevents
+	
+	// Preliminary deletion of events which will not be processed 
+	// to reduce the volume of data
+	
+	version 16.0
+
+	drop if inlist(event, ///
+		"VariableSet", "VariableEnabled", "VariableDisabled", ///
+		"CommentSet", "Restarted", "TranslationSwitched", ///
+		"QuestionDeclaredValid", "QuestionDeclaredInvalid")
+end
 
 program define paraquest
 
-    version 16.0     // version 16 is required because of the frames
+	version 16.0     // version 16 is required because of the frames
 	
 	capture which susotime
 	if _rc {
 		display as error "Error! Requires Stata package -susotime-!"
 		display as text `"You can download Stata package -susotime- from {browse "https://github.com/radyakin/susotime"}"'
+		error 111
 	}	
 	
-	syntax anything, [debug(string)]
+	syntax anything, [debug(string) limit(integer -1)]
+	
+	if ((`limit'<0) & (`limit'!=-1)) {
+		display as error "Option limit() incorrectly specified."
+		display as error "Invalid value of the limit, use a non-negative limit or a value -1 for no limit!"
+		error 198
+	}
 
 	pwf
 	local cf "`r(currentframe)'"
@@ -178,7 +238,7 @@ program define paraquest
 	local wf `anything'
 	
 	cd `"`wf'"'
-	capture do "paradata.do"
+	capture loadparadata
 	local retcode=_rc
 	cd `"`cdir'"'
 	
@@ -188,20 +248,16 @@ program define paraquest
 		label variable tz_offset `"Timezone offset relative to UTC"'
         label variable parameters `"Event-specific parameters"'
 	}
-
+	
+	inspectparadata
 	
 	local mode="quietly"
 	if (`"`debug'"'!="") {
 		keep if (interview__id==`"`debug'"')
 		local mode="noisily"
 	}
-
 	
-	// preliminary deletion of events which will not be processed
-	drop if inlist(event, ///
-	    "VariableSet", "VariableEnabled", "VariableDisabled", "CommentSet", ///
-		"Restarted", "TranslationSwitched", "QuestionDeclaredValid", "QuestionDeclaredInvalid")
-	
+	reduceevents
 	
 	// todo: this is expensive - 3 copies of the data
 	frame copy `cf' paradata
@@ -215,7 +271,8 @@ program define paraquest
 	forval qqq=1/`=_N' {
 		frame change toc
 		local interviewid=interview__id[`qqq']
-		display in green string(`qqq',"%10.0g") `" `interviewid' "' string(`qqq'/`=_N'*100,"%10.2f") "%"
+		display in green string(`qqq',"%10.0g") `" `interviewid' "' ///
+			string(`qqq'/`=_N'*100,"%10.2f") "%"
 		
 		frame copy paradata work, replace
 		frame change work
@@ -227,6 +284,8 @@ program define paraquest
 		timer off 1
 		
 		quietly _frappend , to(RESULT)	
+		
+		if (`qqq'>`limit' & `limit'>=0) continue, break
 	}
 
 	display in green "Finished processing interviews"
