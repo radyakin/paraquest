@@ -17,14 +17,6 @@ program define do_processing
 	drop parameters
 	if ("`debug'"!="") list
 
-	count if (event=="ReceivedByInterviewer") & (event[_n-1]=="ReceivedBySupervisor")
-	if r(N) > 0 {
-		// this is partial synchronization (unsupported)
-		drop if inlist(event, "ReceivedBySupervisor", "ReceivedByInterviewer") 
-		noisily display as input "Interviews with partial synchronization are not supported."
-		// todo: decide how to best handle this data
-	}
-
 	// Keep first completion session
 	summarize order if event=="Resumed"
 	drop if order<r(min)
@@ -32,6 +24,14 @@ program define do_processing
 	// NB! (does not take into account 'restarted')
 	summarize order if event=="Completed" 
 	drop if order>=r(min)
+
+	count if (event=="ReceivedByInterviewer") & (event[_n-1]=="ReceivedBySupervisor")
+	if r(N) > 0 {
+		// this is partial synchronization (unsupported)
+		drop if inlist(event, "ReceivedBySupervisor", "ReceivedByInterviewer") 
+		noisily display as input "Interviews with partial synchronization are not supported."
+		// todo: decide how to best handle this data
+	}	
 	
 	count if event=="AnswerSet"
 	if (r(N)==0) {
@@ -84,11 +84,16 @@ end
 
 program define inject_duration
     version 12.0
+	
+	// in below @ denotes "variable name for column containing ..."
+	
 	syntax , ///
 	  file(string) ///        filename for questionnaire document in HTML format
-	  variable(string) ///    variable name for column containing question varnames
-	  duration(string) ///    variable name for column containing calculated duration for questions
-	  ninterviews(string)  // variable name for column containing number of interviews where the question was answered   
+	  variable(string) ///    @ question varnames
+	  duration(string) ///    @ calculated duration for questions
+	  ninterviews(string) /// @ number of interviews where the question was answered   
+	  tcontrib(string)    /// @ time that this question contributes to the average interview duration
+	  qperc(string)       //  @ percent of time of the average interview duration that is attributable to this question.
 	  
 	// variable and duration are columns in the current data
 	tempfile t1 t2
@@ -99,11 +104,16 @@ program define inject_duration
 		local ivariable=`variable'[`i']
 		local iduration=`duration'[`i']
 		local ininterviews=`ninterviews'[`i']
+		local itcontrib=`tcontrib'[`i']
+		local iqperc=`qperc'[`i']
 		
 		quietly _inject_duration , ifile(`"`t1'"') ofile(`"`t2'"') ///
 								   variable(`"`ivariable'"') ///
 								   duration(`"`iduration'"') ///
-								   ninterviews(`ininterviews')
+								   ninterviews(`ininterviews') ///
+								   tcontrib(`"`itcontrib'"') ///
+								   qperc(`"`iqperc'"')
+								   
 		local t3 `"`t1'"'
 		local t1 `"`t2'"'
 		local t2 `"`t3'"'
@@ -118,11 +128,13 @@ end
 program define _inject_duration
     // internal: do not call directly, call inject_duration instead
     version 12.0
-	syntax , ifile(string) ofile(string) variable(string) duration(string) ninterviews(int)
+	syntax , ifile(string) ofile(string) variable(string) ///
+			 duration(string) ninterviews(int) ///
+			 tcontrib(string) qperc(string)
 
     filefilter "`ifile'" "`ofile'", ///
        from(`"<div class="variable_name">`variable'</div>"') ///
-       to(`"<div class="variable_name"><BIG> &nbsp;  <FONT Color="yellow"><span style="background-color:currentColor"><span style="color:navy">&nbsp;τ = `duration'&nbsp;[`ninterviews']</span></span></FONT></BIG></div><div class="variable_name">`variable'</div>"') replace
+       to(`"<div class="variable_name"><BIG> &nbsp;  <FONT Color="yellow"><span style="background-color:currentColor"><span style="color:navy">&nbsp;&tau; = `duration'&nbsp;[&nu;=`ninterviews']</span></span></FONT><BR> <FONT Color="green"><span style="background-color:currentColor"><span style="color:yellow">&nbsp; &chi; = `tcontrib'&nbsp;[&delta;=`qperc']</span></span></FONT></BIG></div><BR><BR><BR><div class="variable_name">`variable'</div>"') replace
 	capture assert (r(occurrences)==1)
 	if _rc {
 		display in red "Error! Variable '`variable'' not found in the questionnaire file. "
@@ -266,9 +278,12 @@ program define paraquest
 	contract interview__id
 	quietly count
 	
-	display in green "Processing {result:`=r(N)'} interviews{break}"
+	local bigN=c(N)
+	if (`limit'>=0) local bigN=min(c(N), `limit')
+	
+	display in green "Processing {result:`bigN'} interviews{break}"
 
-	forval qqq=1/`=_N' {
+	forval qqq=1/`bigN' {
 		frame change toc
 		local interviewid=interview__id[`qqq']
 		display in green string(`qqq',"%10.0g") `" `interviewid' "' ///
@@ -300,6 +315,7 @@ program define paraquest
 	if (`d' > 0) {
 		display "==========="
 		display "Dropping `d' observations with negative duration"
+		list if duration<0
 		drop if duration<0
 	}
 
@@ -312,7 +328,14 @@ program define paraquest
 			 
 	// round up to the nearest second
 	replace duration=int(duration/1000)*1000
-	susotime readable_duration duration, generate(dt) vshort //msec
+	susotime readable_duration duration, generate(dt) vshort // msec
+	
+	generate double contrib = duration * n_duration/`bigN'
+	susotime readable_duration contrib, generate(dtexp) vshort
+	
+	summarize contrib, meanonly
+	local avgtime=r(sum)
+	generate perc = string(contrib/`avgtime' * 100,"%8.4f")+"%"	 // in percent
 	
 	display in green "Creating questionnaire document with questions' timings"
 
@@ -330,7 +353,8 @@ program define paraquest
 
 	copy `"`orig'"' `"`new'"', replace
 	inject_duration , file(`"`new'"') variable("vname") ///
-	                  duration("dt")  ninterviews("n_duration")
+	                  duration("dt")  ninterviews("n_duration") ///
+					  tcontrib("dtexp") qperc("perc")
 	timer off 2
 	timer list
 	
