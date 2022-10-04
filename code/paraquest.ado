@@ -6,7 +6,7 @@ program define do_processing
 	// Do processing of one interview
 	version 17.0
 	
-	syntax , [debug]
+	syntax , [debug(string)]
 	
 	replace event="AnswerSet" if event=="AnswerRemoved"
 	
@@ -121,7 +121,7 @@ program define inject_duration
 		
 	}
 	
-	copy `"`t2'"' `"`file'"', replace
+	copy `"`t1'"' `"`file'"', replace
 	
 end
 
@@ -295,7 +295,7 @@ program define paraquest
 		drop interview__id
 		// ...... do processing
 		timer on 1
-		`mode' do_processing
+		`mode' do_processing, debug(`"`debug'"')
 		timer off 1
 		
 		quietly _frappend , to(RESULT)	
