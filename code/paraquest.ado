@@ -5,14 +5,14 @@
 program define do_processing
 	// Do processing of one interview
 	version 17.0
-	
+
 	syntax , [debug(string)]
-	
+
 	replace event="AnswerSet" if event=="AnswerRemoved"
-	
+
 	generate vname = substr(parameters, 1, strpos(parameters,"||")-1) ///
-	    if inlist(event, "AnswerSet", "VariableEnabled", "VariableDisabled")
-	
+		if inlist(event, "AnswerSet", "VariableEnabled", "VariableDisabled")
+
 	assert !missing(vname) if event=="AnswerSet"
 	drop parameters
 	if ("`debug'"!="") list
@@ -31,15 +31,15 @@ program define do_processing
 		drop if inlist(event, "ReceivedBySupervisor", "ReceivedByInterviewer") 
 		noisily display as input "Interviews with partial synchronization are not supported."
 		// todo: decide how to best handle this data
-	}	
-	
+	}
+
 	count if event=="AnswerSet"
 	if (r(N)==0) {
 		drop *
 		display in yellow " - SKIPPED"
 		exit
 	}
-	
+
 	generate double eventtime = clock(subinstr(timestamp_utc,"T"," ",.), "YMDhms")
 	format eventtime %tc
 	drop timestamp_utc tz_offset
@@ -56,20 +56,20 @@ program define do_processing
 	replace wait = (eventtime-eventtime[_n-1])/1000 if event=="Resumed"
 	egen totwait=total(wait), by(v)
 	format totwait %21.0g
-	
+
 	generate etime=(eventtime-ntime)/1000
 	egen tottime=total(etime), by(v)
 	format tottime %21.0g
 	generate rtime=etime-wait
-	
+
 	if ("`debug'"!="") list, sepby(v)
-	
+
 	drop if inlist(event, "Paused", "Resumed")
 	replace ntime=eventtime[_n-1] if !missing(eventtime[_n-1])
 
 	generate double duration=1000*(tottime-totwait) // in milliseconds
 	//assert duration>=0 // this will be dealt with later
-	
+
 	if ("`debug'"!="") list, sepby(v)
 	if ("`debug'"!="") susotime readable_duration duration, generate(dt) short
 
@@ -83,46 +83,47 @@ program define do_processing
 end
 
 program define inject_duration
-    version 12.0
-	
+	version 12.0
+
 	// in below @ denotes "variable name for column containing ..."
-	
+
 	syntax , ///
 	  file(string) ///        filename for questionnaire document in HTML format
 	  variable(string) ///    @ question varnames
 	  duration(string) ///    @ calculated duration for questions
 	  ninterviews(string) /// @ number of interviews where the question was answered   
 	  tcontrib(string)    /// @ time that this question contributes to the average interview duration
-	  qperc(string)       //  @ percent of time of the average interview duration that is attributable to this question.
-	  
+	  qperc(string)       /// @ percent of time of the average interview duration that is attributable to this question.
+	  stats(string)       //  which statistics to include into the report
+
 	// variable and duration are columns in the current data
 	tempfile t1 t2
 	copy `"`file'"' `"`t1'"'
- 	isid `variable'
+	isid `variable'
 	forval i=1/`=_N' {
-		
+
 		local ivariable=`variable'[`i']
 		local iduration=`duration'[`i']
 		local ininterviews=`ninterviews'[`i']
 		local itcontrib=`tcontrib'[`i']
 		local iqperc=`qperc'[`i']
-		
+
 		quietly _inject_duration , ifile(`"`t1'"') ofile(`"`t2'"') ///
 								   variable(`"`ivariable'"') ///
 								   duration(`"`iduration'"') ///
 								   ninterviews(`ininterviews') ///
 								   tcontrib(`"`itcontrib'"') ///
-								   qperc(`"`iqperc'"')
-								   
+								   qperc(`"`iqperc'"') stats(`"`stats'"')
+
 		local t3 `"`t1'"'
 		local t1 `"`t2'"'
 		local t2 `"`t3'"'
 		local t3 ""
-		
+
 	}
-	
+
 	copy `"`t1'"' `"`file'"', replace
-	
+
 end
 
 program define _inject_duration
@@ -130,11 +131,35 @@ program define _inject_duration
     version 12.0
 	syntax , ifile(string) ofile(string) variable(string) ///
 			 duration(string) ninterviews(int) ///
-			 tcontrib(string) qperc(string)
+			 tcontrib(string) qperc(string) stats(string)
 
-    filefilter "`ifile'" "`ofile'", ///
-       from(`"<div class="variable_name">`variable'</div>"') ///
-       to(`"<div class="variable_name"><BIG> &nbsp;  <FONT Color="yellow"><span style="background-color:currentColor"><span style="color:navy">&nbsp;&tau; = `duration'&nbsp;[&nu;=`ninterviews']</span></span></FONT><BR> <FONT Color="green"><span style="background-color:currentColor"><span style="color:yellow">&nbsp; &chi; = `tcontrib'&nbsp;[&delta;=`qperc']</span></span></FONT></BIG></div><BR><BR><BR><div class="variable_name">`variable'</div>"') replace
+	local style1 `"<FONT Color="yellow"><span style="background-color:currentColor"><span style="color:navy">"'
+	local style2 `"</span></span></FONT>"'
+
+	local block_tquestion = ///
+	  cond(strpos(`" `stats' "', " tquestion ")>0, `"`style1'&tau;=`duration'`style2'"',"")
+
+	local block_ninterviews = ///
+	  cond(strpos(`" `stats' "', " ninterviews ")>0 ,`"`style1'&nu;=`ninterviews'`style2'"',`""')
+
+	local block_tcontrib = ///
+	  cond(strpos(`" `stats' "', " tcontrib ")>0, `"`style1'&chi;=`tcontrib'`style2'"', `""')
+
+	local block_psurvey = ///
+	  cond(strpos(`" `stats' "', " psurvey ")>0, `"`style1'&delta;=`qperc'`style2'"', `""')
+
+	local newtext=`"`block_tquestion'"'
+	if (`"`newtext'"'!="") local newtext=`"`newtext'<BR>`block_ninterviews'"'
+	else local newtext=`"`block_ninterviews'"'
+	if (`"`newtext'"'!="") local newtext=`"`newtext'<BR>`block_tcontrib'"'
+	else local newtext=`"`block_tcontrib'"'
+	if (`"`newtext'"'!="") local newtext=`"`newtext'<BR>`block_psurvey'"'
+	else local newtext=`"`block_psurvey'"'
+
+	filefilter "`ifile'" "`ofile'", ///
+		from(`"<div class="variable_name">`variable'</div>"') ///
+		to(`"<div class="variable_name"><BIG>`newtext'</BIG></div><div class="variable_name">`variable'</div>"') replace
+
 	capture assert (r(occurrences)==1)
 	if _rc {
 		display in red "Error! Variable '`variable'' not found in the questionnaire file. "
@@ -145,13 +170,13 @@ end
 program define _frappend
 	version 16.0
 	syntax , to(string)
-	
+
 	quietly count
 	if (r(N)==0) {
-	    display in yellow "Nothing to append. Exiting."
+		display in yellow "Nothing to append. Exiting."
 		exit
 	}
-	
+
 	capture confirm frame `to'
 	if (_rc) {
 	  display in green "Frame `to' created."
@@ -159,8 +184,8 @@ program define _frappend
 	}
 
 	capture {
-	    tempfile tmp
-	    save `"`tmp'"'
+		tempfile tmp
+		save `"`tmp'"'
 		frame `to' : append using `"`tmp'"'
 	}
 end	
@@ -168,9 +193,9 @@ end
 program define loadparadata
 
 	// Load paradata from current directory
-	
-    version 16.0
-	
+
+	version 16.0
+
 	tempfile tmp
 
 	filefilter "paradata.do" `"`tmp'"', ///
@@ -182,11 +207,11 @@ end
 
 
 program define inspectparadata
-    
+
 	// Verify paradata doesn't contain any unknown events
-	
+
 	version 16.0
-	
+
 	assert inlist(event, ///
 		"AnswerRemoved", "AnswerSet", "ApproveByHeadquarter", ///
 		"ApproveBySupervisor", "ClosedBySupervisor", "CommentSet", ///
@@ -201,16 +226,16 @@ program define inspectparadata
 		inlist(event, ///
 		"RejectedBySupervisor", "Restarted", "Resumed", ///
 		"SupervisorAssigned", "TranslationSwitched", ///
-		"UnapproveByHeadquarters", "VariableDisabled", "VariableEnabled", ///
-		"VariableSet")
+		"UnapproveByHeadquarters", "VariableDisabled", ///
+		"VariableEnabled", "VariableSet")
 
 end
 
 program define reduceevents
-	
+
 	// Preliminary deletion of events which will not be processed 
 	// to reduce the volume of data
-	
+
 	version 16.0
 
 	drop if inlist(event, ///
@@ -222,16 +247,22 @@ end
 program define paraquest
 
 	version 16.0     // version 16 is required because of the frames
-	
+
 	capture which susotime
 	if _rc {
 		display as error "Error! Requires Stata package -susotime-!"
 		display as text `"You can download Stata package -susotime- from {browse "https://github.com/radyakin/susotime"}"'
 		error 111
-	}	
-	
-	syntax anything, [debug(string) limit(integer -1)]
-	
+	}
+
+	syntax anything, [  ///
+	  debug(string)     ///    "GUID" restrict to one interview here (if necessary)
+	  limit(integer -1) ///    Read no more than specified number of interviews or all (for -1)
+	  stats(string)]    //     Report specific statistics only 
+
+	// Stats is: tquestion, tsurvey, psurvey, ninterviews
+	if missing(`"`stats'"') local stats="tquestion ninterviews tcontrib psurvey"
+
 	if ((`limit'<0) & (`limit'!=-1)) {
 		display as error "Option limit() incorrectly specified."
 		display as error "Invalid value of the limit, use a non-negative limit or a value -1 for no limit!"
@@ -242,45 +273,43 @@ program define paraquest
 	local cf "`r(currentframe)'"
 
 	// Read-in paradata
-	// local debug="GUID" // restrict to one interview here (if necessary)
-
 	local cdir "`c(pwd)'"
 	adopath ++ "`cdir'"
 
 	local wf `anything'
-	
+
 	cd `"`wf'"'
 	capture loadparadata
 	local retcode=_rc
 	cd `"`cdir'"'
-	
+
 	if (`retcode'==111) {
 		// below texts are duplications of what the modern version of 
 		// Survey Solutions would describe those columns.
 		label variable tz_offset `"Timezone offset relative to UTC"'
-        label variable parameters `"Event-specific parameters"'
+		label variable parameters `"Event-specific parameters"'
 	}
-	
+
 	inspectparadata
-	
+
 	local mode="quietly"
 	if (`"`debug'"'!="") {
 		keep if (interview__id==`"`debug'"')
 		local mode="noisily"
 	}
-	
+
 	reduceevents
-	
+
 	// todo: this is expensive - 3 copies of the data
 	frame copy `cf' paradata
 	frame put interview__id, into(toc) // just one variable
 	frame change toc
 	contract interview__id
 	quietly count
-	
+
 	local bigN=c(N)
 	if (`limit'>=0) local bigN=min(c(N), `limit')
-	
+
 	display in green "Processing {result:`bigN'} interviews{break}"
 
 	forval qqq=1/`bigN' {
@@ -288,7 +317,7 @@ program define paraquest
 		local interviewid=interview__id[`qqq']
 		display in green string(`qqq',"%10.0g") `" `interviewid' "' ///
 			string(`qqq'/`=_N'*100,"%10.2f") "%"
-		
+
 		frame copy paradata work, replace
 		frame change work
 		quietly keep if (interview__id==`"`interviewid'"')
@@ -297,15 +326,15 @@ program define paraquest
 		timer on 1
 		`mode' do_processing, debug(`"`debug'"')
 		timer off 1
-		
+
 		quietly _frappend , to(RESULT)	
-		
+
 		if (`qqq'>`limit' & `limit'>=0) continue, break
 	}
 
 	display in green "Finished processing interviews"
 	timer list
-	
+
 	display in green "Aggregating results"
 	frame change RESULT
 	count
@@ -323,20 +352,20 @@ program define paraquest
 			 (sd) sd_duration=duration  ///
 			 (count) n_duration=duration, ///
 		by(vname)
-		
+
 	label variable n_duration "N interviews with response"
-			 
+
 	// round up to the nearest second
 	replace duration=int(duration/1000)*1000
 	susotime readable_duration duration, generate(dt) vshort // msec
-	
+
 	generate double contrib = duration * n_duration/`bigN'
 	susotime readable_duration contrib, generate(dtexp) vshort
-	
+
 	summarize contrib, meanonly
 	local avgtime=r(sum)
 	generate perc = string(contrib/`avgtime' * 100,"%8.4f")+"%"	 // in percent
-	
+
 	display in green "Creating questionnaire document with questions' timings"
 
 	timer on 2
@@ -353,13 +382,13 @@ program define paraquest
 
 	copy `"`orig'"' `"`new'"', replace
 	inject_duration , file(`"`new'"') variable("vname") ///
-	                  duration("dt")  ninterviews("n_duration") ///
-					  tcontrib("dtexp") qperc("perc")
+					  duration("dt")  ninterviews("n_duration") ///
+					  tcontrib("dtexp") qperc("perc") stats(`stats')
 	timer off 2
 	timer list
-	
+
 	display " {break} {break}"
-	
+
 	display `"Click {browse "`new'" :here} to open the questionnaire document."'
 end
 
