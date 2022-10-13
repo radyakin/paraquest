@@ -24,7 +24,7 @@ program define do_processing
 
 	syntax , [debug(string)]
 
-	replace event="AnswerSet" if event=="AnswerRemoved"
+	replace event="AnswerSet" if event=="AnswerRemoved" | event=="CommentSet"
 
 	generate vname = substr(parameters, 1, strpos(parameters,"||")-1) ///
 		if inlist(event, "AnswerSet", "VariableEnabled", "VariableDisabled")
@@ -292,7 +292,7 @@ program define reduceevents
 
 	drop if inlist(event, ///
 		"VariableSet", "VariableEnabled", "VariableDisabled", ///
-		"CommentSet", "Restarted", "TranslationSwitched", ///
+		"Restarted", "TranslationSwitched", ///
 		"QuestionDeclaredValid", "QuestionDeclaredInvalid")
 end
 
@@ -397,7 +397,7 @@ program define paraquest
 		// ...... do processing
 		`mode' do_processing, debug(`"`debug'"')
 
-		quietly _frappend , to(RESULT)	
+		`mode' _frappend , to(RESULT)	
 
 		if (`qqq'>`limit' & `limit'>=0) continue, break
 	}
