@@ -2,6 +2,22 @@
 *** Sergiy Radyakin, The World Bank, 2022
 *** sradyakin@@worldbank.org
 
+program define paraquestversion, rclass
+	return local version "1.00"
+end
+
+program define aboutparaquest
+
+	paraquestversion
+	local v=r(version)
+
+	display " {break}"
+	display as text "PARAQUEST version {result:`v'}"
+	display as text "Sergiy Radyakin, The World Bank, 2022"
+	display as text `"`="sradyakin"+"@"+"worldbank.org"'"'
+	display " {break}"
+end
+
 program define do_processing
 	// Do processing of one interview
 	version 17.0
@@ -68,15 +84,14 @@ program define do_processing
 	replace ntime=eventtime[_n-1] if !missing(eventtime[_n-1])
 
 	generate double duration=1000*(tottime-totwait) // in milliseconds
-	//assert duration>=0 // this will be dealt with later
 
 	if ("`debug'"!="") list, sepby(v)
 	if ("`debug'"!="") susotime readable_duration duration, generate(dt) short
 
-	//drop wait pevt v ntime dur // order
-	if ("`debug'"!="") list
+	if ("`debug'"!="") list, sepby(v)
 
 	collapse (sum)duration , by(responsible vname)
+	
 	susotime readable_duration duration, generate(dt) short
 	if ("`debug'"!="") list
 	assert !missing(vname)
@@ -88,10 +103,10 @@ program define inject_duration
 	// in below @ denotes "variable name for column containing ..."
 
 	syntax , ///
-	  file(string) ///        filename for questionnaire document in HTML format
-	  variable(string) ///    @ question varnames
-	  duration(string) ///    @ calculated duration for questions
-	  ninterviews(string) /// @ number of interviews where the question was answered   
+	  file(string)        /// filename for questionnaire document in HTML format
+	  variable(string)    /// @ question varnames
+	  duration(string)    /// @ calculated duration for questions
+	  ninterviews(string) /// @ number of interviews where the question was answered
 	  tcontrib(string)    /// @ time that this question contributes to the average interview duration
 	  qperc(string)       /// @ percent of time of the average interview duration that is attributable to this question.
 	  stats(string)       //  which statistics to include into the report
@@ -122,9 +137,46 @@ program define inject_duration
 
 	}
 
-	copy `"`t1'"' `"`file'"', replace
+	write_footer, ifile(`"`t1'"') ofile(`"`file'"')
 
 end
+
+program define write_footer
+
+	version 12.0
+	syntax , ifile(string) ofile(string)
+	
+	local ts="$S_DATE $S_TIME"
+	paraquestversion
+	local v=r(version)
+	
+	tempfile tmp
+	
+	filefilter "`ifile'" "`tmp'", replace ///
+		from(`"</body>"') ///
+		to(`"<article class="appendix_section paraquest"><h2 id="paraquest_appendix"><FONT Color="yellow"><span style="background-color:currentColor"><span style="color:navy">PARAQUEST</span></span></FONT></h2><section><P><FONT Color="yellow"><span style="background-color:currentColor"><span style="color:navy">Produced with Paraquest version `v' on `ts'.</span></span></FONT></P></section></article></body>"')
+
+	capture assert (r(occurrences)==1)
+	if _rc {
+		display in red "Error! Legend not found in the questionnaire file. "
+		error 9
+	}
+	
+	
+	// write a link to jump to the newly added section
+	
+	filefilter "`tmp'" "`ofile'", replace ///
+		from(`"class="section_name appendix">Legend</a>"') ///
+		to(`"class="section_name appendix">Legend</a></dd><dt>&nbsp;</dt><dd><a href="#paraquest_appendix" class="section_name appendix">Paraquest</a> "')
+
+	capture assert (r(occurrences)==1)
+	if _rc {
+		display in red "Error! Table of contents entry not found in the questionnaire file. "
+		error 9
+	}
+
+end
+
 
 program define _inject_duration
     // internal: do not call directly, call inject_duration instead
@@ -247,13 +299,18 @@ end
 program define paraquest
 
 	version 16.0     // version 16 is required because of the frames
+	
+	local paraquest_started=clock("$S_DATE $S_TIME","DMYhms")
 
+	aboutparaquest
+	
 	capture which susotime
 	if _rc {
 		display as error "Error! Requires Stata package -susotime-!"
 		display as text `"You can download Stata package -susotime- from {browse "https://github.com/radyakin/susotime"}"'
 		error 111
 	}
+	capture susotime
 
 	syntax anything, [  ///
 	  debug(string)     ///    "GUID" restrict to one interview here (if necessary)
@@ -261,7 +318,14 @@ program define paraquest
 	  stats(string)]    //     Report specific statistics only 
 
 	// Stats is: tquestion, tsurvey, psurvey, ninterviews
-	if missing(`"`stats'"') local stats="tquestion ninterviews tcontrib psurvey"
+	if missing(`"`stats'"') local stats="tquestion"
+	// check options
+	foreach w in `stats' {
+	    if (!inlist("`w'", "tquestion", "ninterviews", "tcontrib", "psurvey")) {
+		    display as error "Option stats() incorrectly specified."
+			error 198
+		}
+	}
 
 	if ((`limit'<0) & (`limit'!=-1)) {
 		display as error "Option limit() incorrectly specified."
@@ -269,12 +333,11 @@ program define paraquest
 		error 198
 	}
 
-	pwf
+	quietly pwf
 	local cf "`r(currentframe)'"
 
 	// Read-in paradata
 	local cdir "`c(pwd)'"
-	adopath ++ "`cdir'"
 
 	local wf `anything'
 
@@ -282,7 +345,7 @@ program define paraquest
 	capture loadparadata
 	local retcode=_rc
 	cd `"`cdir'"'
-
+	
 	if (`retcode'==111) {
 		// below texts are duplications of what the modern version of 
 		// Survey Solutions would describe those columns.
@@ -309,31 +372,38 @@ program define paraquest
 
 	local bigN=c(N)
 	if (`limit'>=0) local bigN=min(c(N), `limit')
+	local paraquest_loaded=clock("$S_DATE $S_TIME","DMYhms")
 
-	display in green "Processing {result:`bigN'} interviews{break}"
+	display in green "Processing {result:`bigN'} interviews:{break}"
 
 	forval qqq=1/`bigN' {
 		frame change toc
 		local interviewid=interview__id[`qqq']
-		display in green string(`qqq',"%10.0g") `" `interviewid' "' ///
-			string(`qqq'/`=_N'*100,"%10.2f") "%"
+		
+		local ni=string(`qqq',"%7.0f")
+		while (strlen(`"`ni'"')<7) {
+		    local ni=`" `ni'"'
+		}
+		
+		local p=string(`qqq'/`=_N'*100,"%6.2f")
+		if (strlen(`"`p'"')<6) local p=`" `p'"'
+		if (strlen(`"`p'"')<6) local p=`" `p'"'
+		display in green `"`ni' `interviewid' "' "`p'%"
 
-		frame copy paradata work, replace
+		quietly frame copy paradata work, replace
 		frame change work
 		quietly keep if (interview__id==`"`interviewid'"')
 		drop interview__id
 		// ...... do processing
-		timer on 1
 		`mode' do_processing, debug(`"`debug'"')
-		timer off 1
 
 		quietly _frappend , to(RESULT)	
 
 		if (`qqq'>`limit' & `limit'>=0) continue, break
 	}
 
-	display in green "Finished processing interviews"
-	timer list
+	display in green "Finished processing interviews!{break}"
+	local paraquest_processed=clock("$S_DATE $S_TIME","DMYhms")
 
 	display in green "Aggregating results"
 	frame change RESULT
@@ -355,20 +425,22 @@ program define paraquest
 
 	label variable n_duration "N interviews with response"
 
-	// round up to the nearest second
-	replace duration=int(duration/1000)*1000
-	susotime readable_duration duration, generate(dt) vshort // msec
+	quietly {
+		// round up to the nearest second
+		replace duration=int(duration/1000)*1000
+		susotime readable_duration duration, generate(dt) vshort // msec
 
-	generate double contrib = duration * n_duration/`bigN'
-	susotime readable_duration contrib, generate(dtexp) vshort
+		generate double contrib = duration * n_duration/`bigN'
+		susotime readable_duration contrib, generate(dtexp) vshort
 
-	summarize contrib, meanonly
-	local avgtime=r(sum)
-	generate perc = string(contrib/`avgtime' * 100,"%8.4f")+"%"	 // in percent
+		summarize contrib, meanonly
+		local avgtime=r(sum)
+		generate perc = string(contrib/`avgtime' * 100,"%8.4f")+"%"	 // in percent
+	}
 
 	display in green "Creating questionnaire document with questions' timings"
 
-	timer on 2
+	local paraquest_aggregated=clock("$S_DATE $S_TIME","DMYhms")
 	local new `""output.html""' // fixed output name
 	local flist `"`: dir "`wf'" files "*.html"'"'
 	local result : list flist-new
@@ -384,9 +456,19 @@ program define paraquest
 	inject_duration , file(`"`new'"') variable("vname") ///
 					  duration("dt")  ninterviews("n_duration") ///
 					  tcontrib("dtexp") qperc("perc") stats(`stats')
-	timer off 2
-	timer list
-
+	
+	local paraquest_reported=clock("$S_DATE $S_TIME","DMYhms")
+	
+	display " {break} {break}"
+	display as text "Loading paradata: " as result ///
+			clockdiff(`paraquest_started',`paraquest_loaded', "second") ///
+			as text "s"
+	display as text "Processing paradata: " as result ///
+			clockdiff(`paraquest_loaded',`paraquest_aggregated', "second") ///
+			as text "s"
+	display as text "Writing report: " as result ///
+			clockdiff(`paraquest_aggregated',`paraquest_reported', "second") ///
+			as text "s"
 	display " {break} {break}"
 
 	display `"Click {browse "`new'" :here} to open the questionnaire document."'
