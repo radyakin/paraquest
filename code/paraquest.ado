@@ -24,7 +24,7 @@ program define do_processing
 
 	syntax , [debug(string)]
 
-	replace event="AnswerSet" if event=="AnswerRemoved" | event=="CommentSet"
+	replace event="AnswerSet" if inlist(event, "AnswerRemoved", "CommentSet")
 
 	generate vname = substr(parameters, 1, strpos(parameters,"||")-1) ///
 		if inlist(event, "AnswerSet", "VariableEnabled", "VariableDisabled")
@@ -85,10 +85,11 @@ program define do_processing
 
 	generate double duration=1000*(tottime-totwait) // in milliseconds
 
-	if ("`debug'"!="") list, sepby(v)
-	if ("`debug'"!="") susotime readable_duration duration, generate(dt) short
-
-	if ("`debug'"!="") list, sepby(v)
+	if ("`debug'"!="") {
+	    list, sepby(v)
+	    susotime readable_duration duration, generate(dt) short
+	    list, sepby(v)
+	}
 
 	collapse (sum)duration , by(responsible vname)
 	
@@ -109,7 +110,10 @@ program define inject_duration
 	  ninterviews(string) /// @ number of interviews where the question was answered
 	  tcontrib(string)    /// @ time that this question contributes to the average interview duration
 	  qperc(string)       /// @ percent of time of the average interview duration that is attributable to this question.
-	  stats(string)       //  which statistics to include into the report
+	  stats(string)       /// which statistics to include into the report
+	  tprocessed(string)  /// processing duration in seconds (for reporting)
+	  bcolor(string)      /// @ background color
+	  cuts(string)        //  cut points for variables classification
 
 	// variable and duration are columns in the current data
 	tempfile t1 t2
@@ -122,13 +126,16 @@ program define inject_duration
 		local ininterviews=`ninterviews'[`i']
 		local itcontrib=`tcontrib'[`i']
 		local iqperc=`qperc'[`i']
+		local ibcolor=`bcolor'[`i']
 
 		quietly _inject_duration , ifile(`"`t1'"') ofile(`"`t2'"') ///
 								   variable(`"`ivariable'"') ///
+								   bcolor(`"`ibcolor'"') ///
 								   duration(`"`iduration'"') ///
 								   ninterviews(`ininterviews') ///
 								   tcontrib(`"`itcontrib'"') ///
-								   qperc(`"`iqperc'"') stats(`"`stats'"')
+								   qperc(`"`iqperc'"') ///
+								   stats(`"`stats'"')
 
 		local t3 `"`t1'"'
 		local t1 `"`t2'"'
@@ -137,24 +144,62 @@ program define inject_duration
 
 	}
 
-	write_footer, ifile(`"`t1'"') ofile(`"`file'"')
+	write_footer, ifile(`"`t1'"') ofile(`"`file'"') ptime(`"`tprocessed'"') cuts("`cuts'")
+
+end
+
+program define get_palette, sclass
+
+	// Defines a palette of colors that are used 
+	// for the three classes of variables by duration.
+
+	version 12.0
+	sreturn local palette="LightGreen Gold HotPink"
 
 end
 
 program define write_footer
 
 	version 12.0
-	syntax , ifile(string) ofile(string)
+	syntax , ///
+	  ifile(string)   ///  input file
+	  ofile(string)   ///  output file
+	  [ptime(string)] /// [optional] processing time
+	  [cuts(string)]  //   cut points for variables classification 
 	
 	local ts="$S_DATE $S_TIME"
 	paraquestversion
 	local v=r(version)
 	
+	if (`"`ptime'"'!="") {
+	    local ptime = "<BR>Processing time: `ptime' seconds.<BR>"
+	}
+	
+	if (`"`cuts'"'!="") {
+		local c1=string(`:word 1 of `cuts'' / 1000,"%6.2f")
+		local c2=string(`:word 2 of `cuts'' / 1000,"%6.2f")
+		
+		get_palette
+		local palette=s(palette)
+		local color1="`:word 1 of `palette''"
+		local color2="`:word 2 of `palette''"
+		local color3="`:word 3 of `palette''"
+	    local styleV2 `"</span></span></FONT>"'
+		local cl="<BR><B>Variable groups:</B><BR>"
+		
+		local styleV1 `"<FONT Color="`color1'"><span style="background-color:currentColor"><span style="color:navy">"'
+		local cl=`"`cl'`styleV1'&nbsp;Group 1:`styleV2' less than `c1' seconds<BR>"'
+		local styleV1 `"<FONT Color="`color2'"><span style="background-color:currentColor"><span style="color:navy">"'
+		local cl=`"`cl'`styleV1'&nbsp;Group 2:`styleV2' between `c1' and `c2' seconds<BR>"'
+		local styleV1 `"<FONT Color="`color3'"><span style="background-color:currentColor"><span style="color:navy">"'
+		local cl=`"`cl'`styleV1'&nbsp;Group 3:`styleV2' more than `c2' seconds."'
+	}
+	
 	tempfile tmp
 	
 	filefilter "`ifile'" "`tmp'", replace ///
 		from(`"</body>"') ///
-		to(`"<article class="appendix_section paraquest"><h2 id="paraquest_appendix"><FONT Color="yellow"><span style="background-color:currentColor"><span style="color:navy">PARAQUEST</span></span></FONT></h2><section><P><FONT Color="yellow"><span style="background-color:currentColor"><span style="color:navy">Produced with Paraquest version `v' on `ts'.</span></span></FONT></P></section></article></body>"')
+		to(`"<article class="appendix_section paraquest"><h2 id="paraquest_appendix">PARAQUEST</h2><section><P>Produced with <A href="https://github.com/radyakin/paraquest">Paraquest</A> version `v' on `ts'.`ptime'</P>`cl'<BR><BR><BR><BR><BR></section></article></body>"')
 
 	capture assert (r(occurrences)==1)
 	if _rc {
@@ -183,10 +228,13 @@ program define _inject_duration
     version 12.0
 	syntax , ifile(string) ofile(string) variable(string) ///
 			 duration(string) ninterviews(int) ///
-			 tcontrib(string) qperc(string) stats(string)
+			 tcontrib(string) qperc(string) stats(string) bcolor(string)
 
 	local style1 `"<FONT Color="yellow"><span style="background-color:currentColor"><span style="color:navy">"'
 	local style2 `"</span></span></FONT>"'
+	
+	local styleV1 `"<FONT Color="`bcolor'"><span style="background-color:currentColor"><span style="color:navy">"'
+	local styleV2 `"</span></span></FONT>"'
 
 	local block_tquestion = ///
 	  cond(strpos(`" `stats' "', " tquestion ")>0, `"`style1'&tau;=`duration'`style2'"',"")
@@ -210,7 +258,7 @@ program define _inject_duration
 
 	filefilter "`ifile'" "`ofile'", ///
 		from(`"<div class="variable_name">`variable'</div>"') ///
-		to(`"<div class="variable_name"><BIG>`newtext'</BIG></div><div class="variable_name">`variable'</div>"') replace
+		to(`"<div class="variable_name"><BIG>`newtext'</BIG></div><div class="variable_name">`styleV1'`variable'`styleV2'</div>"') replace
 
 	capture assert (r(occurrences)==1)
 	if _rc {
@@ -394,7 +442,7 @@ program define paraquest
 		frame change work
 		quietly keep if (interview__id==`"`interviewid'"')
 		drop interview__id
-		// ...... do processing
+		
 		`mode' do_processing, debug(`"`debug'"')
 
 		`mode' _frappend , to(RESULT)	
@@ -414,8 +462,8 @@ program define paraquest
 	if (`d' > 0) {
 		display "==========="
 		display "Dropping `d' observations with negative duration"
-		list if duration<0
-		drop if duration<0
+		list if (duration<0), separator(0)
+		drop if (duration<0)
 	}
 
 	collapse (mean) duration = duration ///
@@ -436,11 +484,26 @@ program define paraquest
 		summarize contrib, meanonly
 		local avgtime=r(sum)
 		generate perc = string(contrib/`avgtime' * 100,"%8.4f")+"%"	 // in percent
+
+		centile contrib, c(33.333 66.666)
+		local c1=r(c_1)
+		local c2=r(c_2)
+		generate tgroup=.
+		replace tgroup=1 if inrange(contrib,0,`c1')
+		replace tgroup=2 if inrange(contrib,`c1',`c2')
+		replace tgroup=3 if contrib>`c2' & !missing(contrib)
+
+		get_palette
+		local palette=s(palette)
+
+		generate bcolor="white"
+		replace bcolor=word("`palette'", tgroup)
 	}
 
-	display in green "Creating questionnaire document with questions' timings"
-
 	local paraquest_aggregated=clock("$S_DATE $S_TIME","DMYhms")
+	local tprocessed=clockdiff(`paraquest_loaded',`paraquest_aggregated', "second")	
+
+	display in green "Creating questionnaire document with questions' timings"
 	local new `""output.html""' // fixed output name
 	local flist `"`: dir "`wf'" files "*.html"'"'
 	local result : list flist-new
@@ -455,7 +518,9 @@ program define paraquest
 	copy `"`orig'"' `"`new'"', replace
 	inject_duration , file(`"`new'"') variable("vname") ///
 					  duration("dt")  ninterviews("n_duration") ///
-					  tcontrib("dtexp") qperc("perc") stats(`stats')
+					  tcontrib("dtexp") qperc("perc") stats(`stats') ///
+					  tprocessed(`tprocessed') bcolor("bcolor") ///
+					  cuts("`c1' `c2'")
 	
 	local paraquest_reported=clock("$S_DATE $S_TIME","DMYhms")
 	
@@ -464,7 +529,7 @@ program define paraquest
 			clockdiff(`paraquest_started',`paraquest_loaded', "second") ///
 			as text "s"
 	display as text "Processing paradata: " as result ///
-			clockdiff(`paraquest_loaded',`paraquest_aggregated', "second") ///
+			`tprocessed' ///
 			as text "s"
 	display as text "Writing report: " as result ///
 			clockdiff(`paraquest_aggregated',`paraquest_reported', "second") ///

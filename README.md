@@ -11,7 +11,7 @@ Changes and discrepancies are possible between different versions. This tool is 
 - only take into account the first session (before the first ***Completed*** event);
 - does not take into account ***Restarted*** event;
 - not compatible with partial synchronization, suspected bug in Survey Solutions: https://github.com/surveysolutions/surveysolutions/issues/2033
-- setting comments is not supported - commenting time is dissolved in answers time.
+- time for comments is added to the question's time.
 - can detect (sometimes) clock adjustment backward, but can never detect clock adjustment forward
 
 ## Requires:
