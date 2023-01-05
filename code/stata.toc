@@ -1,0 +1,4 @@
+********************************************** stata.toc
+v 3
+d Paraquest
+p paraquest Module to estimate questionnaire timings from paradata obtained from Survey Solutions

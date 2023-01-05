@@ -1,0 +1,18 @@
+v 3
+d 'paraquest': Paraquest
+d by Sergiy Radyakin
+d
+d KW: questionnaire
+d KW: timing
+d KW: survey
+d
+d Requires: Stata version 16.0 or newer
+d
+d Distribution-Date: 20221018
+d
+d Author: Sergiy Radyakin, Senior Economist,
+d         Development Economics Data Group, The World Bank
+d
+f paraquest.ado
+f paraquest.sthlp
+* END OF FILE
